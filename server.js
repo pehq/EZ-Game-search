@@ -1,119 +1,107 @@
-/**
- * This is the main Node.js server script for your project
- * Check out the two endpoints this back-end API provides in fastify.get and fastify.post below
- */
+// server.js - This is the main file for your Glitch proxy server.
+// It uses Express to handle incoming requests from your Roblox game
+// and node-fetch to make requests to the Roblox API.
 
-const path = require("path");
+// Import necessary modules
+const express = require('express');
+const fetch = require('node-fetch'); // For making HTTP requests
 
-// Require the fastify framework and instantiate it
-const fastify = require("fastify")({
-  // Set this to true for detailed logging:
-  logger: false,
+// Initialize the Express application
+const app = express();
+
+// --- Configuration ---
+// Get the sensitive .ROBLOSECURITY cookie from environment variables.
+// This is the secure way to store secrets on Glitch.
+const ROBLOSECURITY_COOKIE = process.env.ROBLOSECURITY_COOKIE;
+
+// Base URL for the official Roblox API endpoint
+const ROBLOX_API_BASE_URL = "https://games.roblox.com/v1/games/multiget-place-details";
+
+// --- Middleware ---
+// Enable CORS (Cross-Origin Resource Sharing)
+// This is essential for your Roblox game to be able to make requests to this server.
+// The "*" allows requests from any origin. For production, you might want to
+// restrict this to your specific Roblox game's domain if possible.
+app.use((req, res, next) => {
+  res.header("Access-Control-Allow-Origin", "*");
+  res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept");
+  next();
 });
 
-// ADD FAVORITES ARRAY VARIABLE FROM TODO HERE
+// --- Routes ---
 
-// Setup our static files
-fastify.register(require("@fastify/static"), {
-  root: path.join(__dirname, "public"),
-  prefix: "/", // optional: default '/'
-});
+// Define a GET endpoint for your Roblox game to query place details.
+// Example usage from Roblox: https://your-glitch-project.glitch.me/get-place-details?placeIds=123,456
+app.get('/get-place-details', async (req, res) => {
+  // Log the incoming request for debugging
+  console.log('Received request for /get-place-details');
+  console.log('Query parameters:', req.query);
 
-// Formbody lets us parse incoming forms
-fastify.register(require("@fastify/formbody"));
+  // Extract placeIds from the query parameters.
+  // req.query.placeIds might be a string like "123,456" or an array if sent multiple times.
+  let placeIds = req.query.placeIds;
 
-// View is a templating manager for fastify
-fastify.register(require("@fastify/view"), {
-  engine: {
-    handlebars: require("handlebars"),
-  },
-});
-
-// Load and parse SEO data
-const seo = require("./src/seo.json");
-if (seo.url === "glitch-default") {
-  seo.url = `https://${process.env.PROJECT_DOMAIN}.glitch.me`;
-}
-
-/**
- * Our home page route
- *
- * Returns src/pages/index.hbs with data built into it
- */
-fastify.get("/", function (request, reply) {
-  // params is an object we'll pass to our handlebars template
-  let params = { seo: seo };
-
-  // If someone clicked the option for a random color it'll be passed in the querystring
-  if (request.query.randomize) {
-    // We need to load our color data file, pick one at random, and add it to the params
-    const colors = require("./src/colors.json");
-    const allColors = Object.keys(colors);
-    let currentColor = allColors[(allColors.length * Math.random()) << 0];
-
-    // Add the color properties to the params object
-    params = {
-      color: colors[currentColor],
-      colorError: null,
-      seo: seo,
-    };
+  if (!placeIds) {
+    // If no placeIds are provided, return an error.
+    return res.status(400).json({ error: 'Missing placeIds parameter.' });
   }
 
-  // The Handlebars code will be able to access the parameter values and build them into the page
-  return reply.view("/src/pages/index.hbs", params);
-});
+  // Ensure placeIds is an array. If it's a comma-separated string, split it.
+  if (typeof placeIds === 'string') {
+    placeIds = placeIds.split(',').map(id => id.trim());
+  } else if (!Array.isArray(placeIds)) {
+    // If it's neither a string nor an array, it's an invalid format.
+    return res.status(400).json({ error: 'Invalid placeIds format. Must be a comma-separated string or an array.' });
+  }
 
-/**
- * Our POST route to handle and react to form submissions
- *
- * Accepts body data indicating the user choice
- */
-fastify.post("/", function (request, reply) {
-  // Build the params object to pass to the template
-  let params = { seo: seo };
+  // Construct the query string for the Roblox API.
+  // Roblox's multiget-place-details expects repeated 'placeIds' parameters.
+  const robloxApiQueryParams = placeIds.map(id => `placeIds=${encodeURIComponent(id)}`).join('&');
+  const fullRobloxApiUrl = `${ROBLOX_API_BASE_URL}?${robloxApiQueryParams}`;
 
-  // If the user submitted a color through the form it'll be passed here in the request body
-  let color = request.body.color;
+  console.log('Forwarding request to Roblox API:', fullRobloxApiUrl);
 
-  // If it's not empty, let's try to find the color
-  if (color) {
-    // ADD CODE FROM TODO HERE TO SAVE SUBMITTED FAVORITES
+  try {
+    // Make the request to the actual Roblox API, including the .ROBLOSECURITY cookie.
+    const robloxResponse = await fetch(fullRobloxApiUrl, {
+      method: 'GET',
+      headers: {
+        'Cookie': `.ROBLOSECURITY=${ROBLOSECURITY_COOKIE}`,
+        'Accept': 'application/json'
+      }
+    });
 
-    // Load our color data file
-    const colors = require("./src/colors.json");
-
-    // Take our form submission, remove whitespace, and convert to lowercase
-    color = color.toLowerCase().replace(/\s/g, "");
-
-    // Now we see if that color is a key in our colors object
-    if (colors[color]) {
-      // Found one!
-      params = {
-        color: colors[color],
-        colorError: null,
-        seo: seo,
-      };
-    } else {
-      // No luck! Return the user value as the error property
-      params = {
-        colorError: request.body.color,
-        seo: seo,
-      };
+    // Check if the Roblox API returned an error status (e.g., 401, 404, 500)
+    if (!robloxResponse.ok) {
+      const errorText = await robloxResponse.text(); // Get raw error response
+      console.error(`Roblox API returned an error: ${robloxResponse.status} ${robloxResponse.statusText} - ${errorText}`);
+      // Forward the error status and message back to the Roblox game
+      return res.status(robloxResponse.status).json({
+        error: `Roblox API Error: ${robloxResponse.status} ${robloxResponse.statusText}`,
+        details: errorText
+      });
     }
-  }
 
-  // The Handlebars template will use the parameter values to update the page with the chosen color
-  return reply.view("/src/pages/index.hbs", params);
+    // Parse the JSON response from Roblox
+    const data = await robloxResponse.json();
+
+    // Send the data back to the Roblox game
+    console.log('Successfully fetched data from Roblox API, sending back to client.');
+    res.json(data);
+
+  } catch (error) {
+    // Catch any network errors or other exceptions during the fetch operation
+    console.error('Error fetching from Roblox API:', error);
+    res.status(500).json({ error: 'Internal server error when fetching from Roblox API.', details: error.message });
+  }
 });
 
-// Run the server and report out to the logs
-fastify.listen(
-  { port: process.env.PORT, host: "0.0.0.0" },
-  function (err, address) {
-    if (err) {
-      console.error(err);
-      process.exit(1);
-    }
-    console.log(`Your app is listening on ${address}`);
+// --- Server Start ---
+// Listen for requests on the port Glitch provides (process.env.PORT)
+const listener = app.listen(process.env.PORT, () => {
+  console.log('Your app is listening on port ' + listener.address().port);
+  if (!ROBLOSECURITY_COOKIE) {
+    console.warn('WARNING: ROBLOSECURITY_COOKIE is not set in your .env file!');
+    console.warn('The proxy will likely fail to authenticate with Roblox APIs.');
   }
-);
+});
