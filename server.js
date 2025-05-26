@@ -38,8 +38,6 @@ app.use((req, res, next) => {
 // Example usage from Roblox: https://your-glitch-project.glitch.me/get-place-details?placeIds=123,456
 app.get('/get-place-details', async (req, res) => {
   // Log the incoming request for debugging
-  console.log('Received request for /get-place-details');
-  console.log('Query parameters:', req.query);
 
   // Extract placeIds from the query parameters.
   let placeIds = req.query.placeIds;
@@ -57,7 +55,6 @@ app.get('/get-place-details', async (req, res) => {
     return res.status(400).json({ error: 'Invalid placeIds format. Must be a comma-separated string or an array.' });
   }
 
-  console.log(`Total placeIds received: ${placeIds.length}`);
 
   let allResults = [];
   let errors = [];
@@ -67,8 +64,6 @@ app.get('/get-place-details', async (req, res) => {
     const batch = placeIds.slice(i, i + BATCH_SIZE);
     const robloxApiQueryParams = batch.map(id => `placeIds=${encodeURIComponent(id)}`).join('&');
     const fullRobloxApiUrl = `${ROBLOX_API_BASE_URL}?${robloxApiQueryParams}`;
-
-    console.log(`Forwarding batch request to Roblox API (${i / BATCH_SIZE + 1}/${Math.ceil(placeIds.length / BATCH_SIZE)}):`, fullRobloxApiUrl);
 
     try {
       const robloxResponse = await fetch(fullRobloxApiUrl, {
@@ -108,7 +103,6 @@ app.get('/get-place-details', async (req, res) => {
   }
 
   // Send the combined data and any errors back to the Roblox game
-  console.log('Finished processing all batches. Sending results back to client.');
   if (errors.length > 0) {
     // If there were any errors in batches, return a 200 OK but include the errors
     // so the Roblox client can see partial data and the issues.
