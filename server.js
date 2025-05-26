@@ -1,6 +1,6 @@
 // server.js - This is the main file for your Glitch proxy server.
-// It uses Express to handle incoming requests from your Roblox game
-// and node-fetch to make requests to the Roblox API.
+// It uses Express to handle incoming requests and node-fetch to make
+// requests to the Roblox API.
 
 // Import necessary modules
 const express = require('express');
@@ -16,6 +16,10 @@ const ROBLOSECURITY_COOKIE = process.env.ROBLOSECURITY_COOKIE;
 
 // Base URL for the official Roblox API endpoint
 const ROBLOX_API_BASE_URL = "https://games.roblox.com/v1/games/multiget-place-details";
+
+// Define the maximum number of placeIds to send in a single request to Roblox.
+// This helps avoid "400 Bad Request" errors due to URL length limits.
+const BATCH_SIZE = 50; // You can adjust this if needed, but 50 is a common safe number.
 
 // --- Middleware ---
 // Enable CORS (Cross-Origin Resource Sharing)
@@ -38,7 +42,6 @@ app.get('/get-place-details', async (req, res) => {
   console.log('Query parameters:', req.query);
 
   // Extract placeIds from the query parameters.
-  // req.query.placeIds might be a string like "123,456" or an array if sent multiple times.
   let placeIds = req.query.placeIds;
 
   if (!placeIds) {
@@ -54,45 +57,68 @@ app.get('/get-place-details', async (req, res) => {
     return res.status(400).json({ error: 'Invalid placeIds format. Must be a comma-separated string or an array.' });
   }
 
-  // Construct the query string for the Roblox API.
-  // Roblox's multiget-place-details expects repeated 'placeIds' parameters.
-  const robloxApiQueryParams = placeIds.map(id => `placeIds=${encodeURIComponent(id)}`).join('&');
-  const fullRobloxApiUrl = `${ROBLOX_API_BASE_URL}?${robloxApiQueryParams}`;
+  console.log(`Total placeIds received: ${placeIds.length}`);
 
-  console.log('Forwarding request to Roblox API:', fullRobloxApiUrl);
+  let allResults = [];
+  let errors = [];
 
-  try {
-    // Make the request to the actual Roblox API, including the .ROBLOSECURITY cookie.
-    const robloxResponse = await fetch(fullRobloxApiUrl, {
-      method: 'GET',
-      headers: {
-        'Cookie': `.ROBLOSECURITY=${ROBLOSECURITY_COOKIE}`,
-        'Accept': 'application/json'
-      }
-    });
+  // Iterate through the placeIds in batches
+  for (let i = 0; i < placeIds.length; i += BATCH_SIZE) {
+    const batch = placeIds.slice(i, i + BATCH_SIZE);
+    const robloxApiQueryParams = batch.map(id => `placeIds=${encodeURIComponent(id)}`).join('&');
+    const fullRobloxApiUrl = `${ROBLOX_API_BASE_URL}?${robloxApiQueryParams}`;
 
-    // Check if the Roblox API returned an error status (e.g., 401, 404, 500)
-    if (!robloxResponse.ok) {
-      const errorText = await robloxResponse.text(); // Get raw error response
-      console.error(`Roblox API returned an error: ${robloxResponse.status} ${robloxResponse.statusText} - ${errorText}`);
-      // Forward the error status and message back to the Roblox game
-      return res.status(robloxResponse.status).json({
-        error: `Roblox API Error: ${robloxResponse.status} ${robloxResponse.statusText}`,
-        details: errorText
+    console.log(`Forwarding batch request to Roblox API (${i / BATCH_SIZE + 1}/${Math.ceil(placeIds.length / BATCH_SIZE)}):`, fullRobloxApiUrl);
+
+    try {
+      const robloxResponse = await fetch(fullRobloxApiUrl, {
+        method: 'GET',
+        headers: {
+          'Cookie': `.ROBLOSECURITY=${ROBLOSECURITY_COOKIE}`,
+          'Accept': 'application/json'
+        }
       });
+
+      if (!robloxResponse.ok) {
+        const errorText = await robloxResponse.text();
+        console.error(`Roblox API returned an error for batch: ${robloxResponse.status} ${robloxResponse.statusText} - ${errorText}`);
+        errors.push({
+          batchIndex: i,
+          status: robloxResponse.status,
+          statusText: robloxResponse.statusText,
+          details: errorText
+        });
+        // Continue to the next batch even if one fails, to get as much data as possible
+        continue;
+      }
+
+      const data = await robloxResponse.json();
+      allResults = allResults.concat(data); // Add batch results to overall results
+
+    } catch (error) {
+      console.error(`Error fetching from Roblox API for batch ${i / BATCH_SIZE + 1}:`, error);
+      errors.push({
+        batchIndex: i,
+        status: 500, // Internal server error
+        statusText: 'Internal Server Error',
+        details: error.message
+      });
+      continue;
     }
+  }
 
-    // Parse the JSON response from Roblox
-    const data = await robloxResponse.json();
-
-    // Send the data back to the Roblox game
-    console.log('Successfully fetched data from Roblox API, sending back to client.');
-    res.json(data);
-
-  } catch (error) {
-    // Catch any network errors or other exceptions during the fetch operation
-    console.error('Error fetching from Roblox API:', error);
-    res.status(500).json({ error: 'Internal server error when fetching from Roblox API.', details: error.message });
+  // Send the combined data and any errors back to the Roblox game
+  console.log('Finished processing all batches. Sending results back to client.');
+  if (errors.length > 0) {
+    // If there were any errors in batches, return a 200 OK but include the errors
+    // so the Roblox client can see partial data and the issues.
+    res.status(200).json({
+      data: allResults,
+      errors: errors,
+      message: 'Some batches failed to fetch data from Roblox API.'
+    });
+  } else {
+    res.json(allResults);
   }
 });
 
