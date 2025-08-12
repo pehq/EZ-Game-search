@@ -1,4 +1,3 @@
-// api/get-place-details.js
 const fetch = require('node-fetch');
 
 const ROBLOSECURITY_COOKIE = process.env.ROBLOSECURITY_COOKIE;
@@ -6,18 +5,15 @@ const ROBLOX_API_BASE_URL = "https://games.roblox.com/v1/games/multiget-place-de
 const BATCH_SIZE = 50;
 
 module.exports = async (req, res) => {
-  // Enable CORS
+  // CORS headers
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept");
-
   if (req.method === "OPTIONS") {
-    // Preflight request
     res.status(200).end();
     return;
   }
 
   let placeIds = req.query.placeIds;
-
   if (!placeIds) {
     return res.status(400).json({ error: 'Missing placeIds parameter.' });
   }
@@ -58,7 +54,6 @@ module.exports = async (req, res) => {
 
       const data = await robloxResponse.json();
       allResults = allResults.concat(data);
-
     } catch (error) {
       errors.push({
         batchIndex: i,
